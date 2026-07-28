@@ -1,0 +1,50 @@
+models:
+  - name: person
+    enabled: true
+    path: models/person.pt
+    conf: 0.25
+    iou: 0.7
+    class_map:
+      0: 0
+  - name: heavy_equipment
+    enabled: true
+    path: models/equipment.pt
+    conf: 0.4
+    iou: 0.7
+    class_map:
+      0: 1
+      1: 2
+      2: 3
+      3: 4
+      4: 5
+      5: 6
+      6: 7
+      7: 8
+      8: 9
+      9: 10
+      10: 11
+
+source_dir: data/images
+labels_auto_dir: labels_auto
+labels_reviewed_dir: labels_reviewed
+previews_dir: previews
+duplicate_iou: 0.9
+save_previews: true
+
+classes:
+  - person
+  - Bulldozer
+  - Concrete mixer
+  - Crane
+  - Excavator
+  - Loader
+  - Other vehicle
+  - Pile driving
+  - Pump truck
+  - Roller
+  - Static crane
+  - Truck
+
+classes_path: classes.txt
+dataset_output_dir: dataset_output
+watch_source_dir: false

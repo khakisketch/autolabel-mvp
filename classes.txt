@@ -1,0 +1,12 @@
+person
+Bulldozer
+Concrete mixer
+Crane
+Excavator
+Loader
+Other vehicle
+Pile driving
+Pump truck
+Roller
+Static crane
+Truck

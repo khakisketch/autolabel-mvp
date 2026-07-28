@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 학습 모델과 변환 모델
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# 개인 PC 경로가 포함된 실제 설정
+autolabel_config.yaml
+
+# 원본 이미지와 생성·검수 데이터
+data/
+images/
+labels_auto/
+labels_reviewed/
+labels_reviewed_before_*/
+previews/
+dataset_output/
+
+# 실행 중 생성되는 파일
+*.log
+review_status.json
