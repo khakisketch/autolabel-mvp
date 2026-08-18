@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -8,8 +9,10 @@ from typing import Any
 import yaml
 from ultralytics import YOLO
 
+from image_io import IMAGE_EXTENSIONS, read_image, write_image
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+__all__ = ["IMAGE_EXTENSIONS"]
 
 
 @dataclass(frozen=True)
@@ -140,6 +143,13 @@ def load_model(model_path: Path) -> YOLO:
     if not model_path.exists():
         raise FileNotFoundError(f"model_path does not exist: {model_path}")
     return YOLO(str(model_path))
+
+
+def find_missing_model_paths(model_specs: list[ModelSpec]) -> list[ModelSpec]:
+    """사용 설정된 모델 중 .pt 파일이 실제로 없는 것을 미리 찾는다."""
+    return [
+        model_spec for model_spec in model_specs if not model_spec.path.exists()
+    ]
 
 
 def load_models(model_specs: list[ModelSpec]) -> list[tuple[ModelSpec, YOLO]]:
@@ -349,10 +359,7 @@ def draw_preview(image_path: Path, label_lines: list[str], classes: list[str], p
     except ImportError as exc:
         raise RuntimeError("opencv-python is required to save preview images") from exc
 
-    preview_image = cv2.imread(str(image_path))
-    if preview_image is None:
-        raise RuntimeError(f"failed to read image for preview: {image_path}")
-
+    preview_image = read_image(image_path)
     image_height, image_width = preview_image.shape[:2]
     for label_line in label_lines:
         parts = label_line.split()
@@ -378,15 +385,41 @@ def draw_preview(image_path: Path, label_lines: list[str], classes: list[str], p
             2,
         )
 
-    cv2.imwrite(str(preview_path), preview_image)
+    write_image(preview_path, preview_image)
 
 
-def run_autolabel(config_path: Path) -> dict[str, int]:
-    """config_path 설정에 따라 모든 이미지의 자동 라벨링을 실행한다."""
+def describe_image_failure(image_path: Path, exc: Exception) -> str:
+    """추론 실패 원인을 사용자가 이해할 수 있는 문장으로 바꾼다.
+
+    사진을 읽지 못한 경우 YOLO 내부 오류가 그대로 나와서 원인을 알기 어렵다.
+    """
+    try:
+        read_image(image_path)
+    except Exception as read_exc:
+        return f"사진을 읽을 수 없습니다({read_exc})"
+    return str(exc)
+
+
+def run_autolabel(
+    config_path: Path,
+    skip_existing: bool = False,
+    progress_callback: Callable[[int, int, Path], None] | None = None,
+) -> dict[str, Any]:
+    """config_path 설정에 따라 모든 이미지의 자동 라벨링을 실행한다.
+
+    이미지 1장이 실패해도 전체를 중단하지 않고 실패 목록에 모아 끝까지 진행한다.
+    """
     config = load_config(config_path)
     base_dir = config_path.parent
 
     model_specs = build_model_specs(config, base_dir)
+    missing_models = find_missing_model_paths(model_specs)
+    if missing_models:
+        missing_text = ", ".join(
+            f"{model_spec.name}={model_spec.path}" for model_spec in missing_models
+        )
+        raise FileNotFoundError(f"model_path does not exist: {missing_text}")
+
     source_dir = resolve_path(base_dir, config["source_dir"])
     labels_auto_dir = resolve_path(base_dir, config["labels_auto_dir"])
     previews_dir = resolve_path(base_dir, config["previews_dir"])
@@ -397,27 +430,43 @@ def run_autolabel(config_path: Path) -> dict[str, int]:
     models = load_models(model_specs)
     image_paths = iter_image_paths(source_dir)
 
-    summary = {
+    summary: dict[str, Any] = {
         "models_total": len(models),
         "images_total": len(image_paths),
+        "images_skipped": 0,
         "labels_written": 0,
         "boxes_raw_total": 0,
         "boxes_removed_duplicates": 0,
         "boxes_total": 0,
         "previews_written": 0,
+        "failures": [],
     }
 
-    for image_path in image_paths:
+    for image_index, image_path in enumerate(image_paths, start=1):
+        if progress_callback is not None:
+            progress_callback(image_index, len(image_paths), image_path)
+
         relative_image_path = image_path.relative_to(source_dir)
         output_label_path = labels_auto_dir / relative_image_path.with_suffix(".txt")
         preview_path = previews_dir / relative_image_path.with_suffix(".jpg")
 
-        label_lines, image_statistics = generate_label_lines_for_image(
-            image_path,
-            models,
-            duplicate_iou,
-        )
-        write_label_file(output_label_path, label_lines)
+        if skip_existing and output_label_path.exists():
+            summary["images_skipped"] += 1
+            continue
+
+        try:
+            label_lines, image_statistics = generate_label_lines_for_image(
+                image_path,
+                models,
+                duplicate_iou,
+            )
+            write_label_file(output_label_path, label_lines)
+        except Exception as exc:
+            summary["failures"].append(
+                {"image": str(image_path), "error": describe_image_failure(image_path, exc)}
+            )
+            continue
+
         summary["labels_written"] += 1
         summary["boxes_raw_total"] += image_statistics["boxes_raw"]
         summary["boxes_removed_duplicates"] += image_statistics[
@@ -426,8 +475,14 @@ def run_autolabel(config_path: Path) -> dict[str, int]:
         summary["boxes_total"] += image_statistics["boxes_total"]
 
         if save_previews:
-            draw_preview(image_path, label_lines, classes, preview_path)
-            summary["previews_written"] += 1
+            try:
+                draw_preview(image_path, label_lines, classes, preview_path)
+            except Exception as exc:
+                summary["failures"].append(
+                    {"image": str(preview_path), "error": f"preview: {exc}"}
+                )
+            else:
+                summary["previews_written"] += 1
 
     return summary
 
@@ -441,23 +496,60 @@ def parse_args() -> argparse.Namespace:
         default=Path("autolabel_config.yaml"),
         help="autolabel_config.yaml 경로",
     )
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="이미 txt가 있는 이미지는 건너뛴다(중단된 작업 이어서 실행).",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="이미지별 진행 상황을 출력하지 않는다.",
+    )
     return parser.parse_args()
+
+
+def print_progress(image_index: int, images_total: int, image_path: Path) -> None:
+    """처리 중인 이미지 번호와 이름을 한 줄로 갱신 출력한다."""
+    percent = image_index * 100 // max(1, images_total)
+    print(
+        f"\r[{image_index}/{images_total}] {percent:3d}%  {image_path.name[:50]:<50}",
+        end="",
+        flush=True,
+    )
 
 
 def main() -> None:
     """CLI 실행 진입점."""
     args = parse_args()
     config_path = args.config.resolve()
-    summary = run_autolabel(config_path)
+
+    try:
+        summary = run_autolabel(
+            config_path,
+            skip_existing=args.skip_existing,
+            progress_callback=None if args.quiet else print_progress,
+        )
+    except Exception as exc:
+        print(f"\n자동 라벨링을 시작하지 못했습니다: {exc}")
+        raise SystemExit(1) from exc
+
+    if not args.quiet:
+        print()
 
     print("Auto-labeling complete")
     print(f"models_total={summary['models_total']}")
     print(f"images_total={summary['images_total']}")
+    print(f"images_skipped={summary['images_skipped']}")
     print(f"labels_written={summary['labels_written']}")
     print(f"boxes_raw_total={summary['boxes_raw_total']}")
     print(f"boxes_removed_duplicates={summary['boxes_removed_duplicates']}")
     print(f"boxes_total={summary['boxes_total']}")
     print(f"previews_written={summary['previews_written']}")
+    print(f"failures={len(summary['failures'])}")
+
+    for failure in summary["failures"]:
+        print(f"  실패: {failure['image']} -> {failure['error']}")
 
 
 if __name__ == "__main__":

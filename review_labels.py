@@ -61,13 +61,16 @@ def load_classes(classes_path: Path) -> list[str]:
 
 
 def parse_yolo_label_line(label_line: str) -> BBox:
-    """YOLO txt 한 줄을 BBox로 변환한다."""
+    """YOLO txt 한 줄을 BBox로 변환한다.
+
+    다른 도구가 붙여 두는 confidence 6번째 값은 있어도 무시하고 읽는다.
+    """
     parts = label_line.split()
-    if len(parts) != 5:
+    if len(parts) not in (5, 6):
         raise ValueError(f"invalid YOLO label line: {label_line}")
 
     class_id = int(parts[0])
-    x_center, y_center, width, height = [float(value) for value in parts[1:]]
+    x_center, y_center, width, height = [float(value) for value in parts[1:5]]
     return BBox(
         class_id=class_id,
         x_center=x_center,
@@ -93,12 +96,18 @@ def load_bboxes(label_path: Path) -> list[BBox]:
     if not label_path.exists():
         return []
 
-    label_lines = [
-        line.strip()
-        for line in label_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    return [parse_yolo_label_line(label_line) for label_line in label_lines]
+    bboxes: list[BBox] = []
+    for line_number, raw_line in enumerate(
+        label_path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        label_line = raw_line.strip()
+        if not label_line:
+            continue
+        try:
+            bboxes.append(parse_yolo_label_line(label_line))
+        except ValueError as exc:
+            raise ValueError(f"{label_path}:{line_number}: {exc}") from exc
+    return bboxes
 
 
 def resolve_label_for_review(

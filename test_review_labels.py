@@ -160,9 +160,37 @@ class ReviewLabelsTest(unittest.TestCase):
                 completed_image_keys,
             )
             self.assertIn(
-                '"completed_images": [',
+                '"sources"',
                 status_path.read_text(encoding="utf-8"),
             )
+
+    def test_tolerates_confidence_column_from_other_tools(self) -> None:
+        """다른 도구가 붙인 6번째 confidence 값이 있어도 읽어야 한다."""
+        with TemporaryDirectory() as temp_dir:
+            label_path = Path(temp_dir) / "sample.txt"
+            label_path.write_text(
+                "0 0.500000 0.500000 0.200000 0.300000 0.874\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                load_bboxes(label_path),
+                [BBox(0, 0.5, 0.5, 0.2, 0.3)],
+            )
+
+    def test_broken_label_error_points_at_file_and_line(self) -> None:
+        """어느 파일 몇 번째 줄이 깨졌는지 알려줘야 고칠 수 있다."""
+        with TemporaryDirectory() as temp_dir:
+            label_path = Path(temp_dir) / "sample.txt"
+            label_path.write_text(
+                "0 0.5 0.5 0.2 0.3\n0 0.5 0.5\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ValueError) as error:
+                load_bboxes(label_path)
+
+            self.assertIn("sample.txt:2", str(error.exception))
 
     def test_find_next_uncompleted_index_wraps_around(self) -> None:
         image_keys = ["a.jpg", "b.jpg", "c.jpg"]

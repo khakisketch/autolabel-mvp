@@ -276,6 +276,33 @@ class_id x_center y_center width height
 부작용:
 - preview 이미지 파일을 생성하거나 덮어쓴다.
 
+읽기·쓰기는 `image_io`를 거친다. `cv2.imread`/`cv2.imwrite`는 Windows에서
+한글이 든 경로를 처리하지 못해서, 읽기는 `None`을 돌려주고 쓰기는 아무 말 없이
+`False`만 남긴다. `image_io`는 파일을 바이트로 직접 다뤄 이 문제를 피하고
+실패를 예외로 알린다.
+
+### `image_io.read_image` / `image_io.write_image`
+
+목적:
+- 한글·공백이 포함된 경로에서도 이미지를 안전하게 읽고 쓴다.
+
+이 동작을 바꾸려면:
+- 지원 확장자는 `image_io.IMAGE_EXTENSIONS`를 수정한다.
+
+### `find_missing_model_paths`
+
+목적:
+- 사용 설정된 모델 중 `.pt` 파일이 없는 것을 실행 전에 찾아낸다.
+
+쓰이는 곳:
+- `run_autolabel`은 추론을 시작하기 전에 막고, GUI는 시작할 때 경고로 보여준다.
+
+### `describe_image_failure`
+
+목적:
+- 추론 실패 원인을 사용자가 읽을 수 있는 문장으로 바꾼다.
+- 사진을 못 읽어서 생긴 실패는 YOLO 내부 오류 대신 "사진을 읽을 수 없습니다"로 알린다.
+
 ### `ReviewApp`
 
 목적:
@@ -289,17 +316,27 @@ class_id x_center y_center width height
 처리:
 - 이미지 목록을 보여준다.
 - 자동 생성 bbox를 화면에 그린다.
-- 마우스 드래그로 bbox를 추가한다.
-- 선택한 bbox를 삭제한다.
+- 빈 곳을 드래그하면 새 bbox를 그린다.
+- 선택한 bbox를 옮기거나, 핸들로 크기를 바꾸거나, 삭제한다.
 - 선택한 bbox의 class를 변경한다.
-- 저장 버튼을 누르면 검수 완료 txt를 저장한다.
+- 고친 사진만 검수 완료 txt로 저장한다.
+- `검수 완료`로 표시한 사진만 학습 폴더로 내보낸다.
 
 출력 데이터:
 - `labels_reviewed/*.txt`
+- `labels_reviewed/review_status.json`
+- 학습 폴더의 `images/train`, `labels/train`, `classes.txt`, `data.yaml`
+
+화면 그리기 방식:
+- 이미지 전체를 배율만큼 키우지 않고, 화면에 보이는 부분만 잘라서 그린다.
+  전체를 키우면 4배 확대에서 수백 MB짜리 배열이 만들어지고 창이 화면 밖으로 커진다.
+- 좌표 변환은 `image_to_canvas`와 `canvas_to_image` 두 함수에 모여 있다.
 
 이 동작을 바꾸려면:
 - 화면 구성과 버튼 동작은 `review_gui.py`를 수정한다.
+- 단축키는 `bind_shortcuts`와 `SHORTCUT_HELP_ROWS`를 함께 수정한다.
 - bbox 읽기/쓰기/CRUD 규칙은 `review_labels.py`를 수정한다.
+- 검수 완료 상태 저장 형식은 `review_status.py`를 수정한다.
 
 ## 6. 실행과 검증
 
@@ -321,7 +358,7 @@ python review_gui.py --config autolabel_config.yaml
 
 ```powershell
 cd C:\Users\suny0\labeling\autolabel_mvp
-python -X utf8 -m unittest test_review_labels.py
+python -X utf8 -m unittest discover -p "test_*.py"
 ```
 
 확인할 파일:
@@ -335,3 +372,7 @@ python -X utf8 -m unittest test_review_labels.py
 - 서로 다른 class bbox는 겹쳐도 유지된다.
 - preview 이미지에는 중복 제거 후 bbox가 표시된다.
 - GUI에서 저장 버튼을 누르면 `labels_reviewed/*.txt`가 생성된다.
+- 한글이 든 폴더에서도 사진이 열리고 preview가 저장된다.
+- 사진 1장이 손상되어도 나머지 사진의 자동 라벨링은 계속된다.
+- 사진을 넘겨보기만 하면 `labels_reviewed`에 파일이 생기지 않는다.
+- `검수 완료`를 누른 사진만 학습 폴더에 쌓인다.
